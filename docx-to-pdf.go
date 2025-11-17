@@ -2,9 +2,11 @@ package docx2pdf
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -59,12 +61,11 @@ type Document struct {
 	Drawings   []Drawing   `xml:"body>drawing"`
 }
 
-func extractTextFromDocx(docxPath string) (string, error) {
-	reader, err := zip.OpenReader(docxPath)
+func extractTextFromDocx(docxBytes []byte) (string, error) {
+	reader, err := zip.NewReader(bytes.NewReader(docxBytes), int64(len(docxBytes)))
 	if err != nil {
 		return "", err
 	}
-	defer reader.Close()
 
 	var documentXML string
 	for _, file := range reader.File {
@@ -75,7 +76,7 @@ func extractTextFromDocx(docxPath string) (string, error) {
 			}
 			defer rc.Close()
 
-			bytes, err := ioutil.ReadAll(rc)
+			bytes, err := io.ReadAll(rc)
 			if err != nil {
 				return "", err
 			}
@@ -155,9 +156,9 @@ func addImageToPDF(pdf *gofpdf.Fpdf, imgPath string, x, y, width, height float64
 	pdf.Image(imgPath, x, y, width, height, false, "", 0, "")
 }
 
-func extractImagesFromDocx(_ string, reader *zip.ReadCloser) (map[string]string, error) {
+func extractImagesFromDocx(_ []byte, reader *zip.Reader) (map[string]string, error) {
 	images := make(map[string]string)
-	tempDir, err := ioutil.TempDir("", "docx_images")
+	tempDir, err := os.MkdirTemp("", "docx_images")
 	if err != nil {
 		return nil, err
 	}
@@ -170,13 +171,13 @@ func extractImagesFromDocx(_ string, reader *zip.ReadCloser) (map[string]string,
 			}
 			defer rc.Close()
 
-			imgBytes, err := ioutil.ReadAll(rc)
+			imgBytes, err := io.ReadAll(rc)
 			if err != nil {
 				return nil, err
 			}
 
 			imgPath := filepath.Join(tempDir, filepath.Base(file.Name))
-			err = ioutil.WriteFile(imgPath, imgBytes, 0644)
+			err = os.WriteFile(imgPath, imgBytes, 0644)
 			if err != nil {
 				return nil, err
 			}
@@ -187,14 +188,14 @@ func extractImagesFromDocx(_ string, reader *zip.ReadCloser) (map[string]string,
 	return images, nil
 }
 
-func createPDF(text string, outputPath string, images map[string]string) error {
+func createPDF(text string, images map[string]string) ([]byte, error) {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 	pdf.AddPage()
 
 	var doc Document
 	err := xml.Unmarshal([]byte(text), &doc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, para := range doc.Paragraphs {
@@ -212,31 +213,35 @@ func createPDF(text string, outputPath string, images map[string]string) error {
 		}
 	}
 
-	err = pdf.OutputFileAndClose(outputPath)
-	return err
+	// create buffer to write pdf to
+	var buf bytes.Buffer
+	err = pdf.Output(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-func ConvertFile(inputFile string, outputFile string) error {
-	reader, err := zip.OpenReader(inputFile)
+func ConvertBytes(inputBytes []byte) ([]byte, error) {
+	reader, err := zip.NewReader(bytes.NewReader(inputBytes), int64(len(inputBytes)))
 	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
-	text, err := extractTextFromDocx(inputFile)
-	if err != nil {
-		return err
+		return nil, err
 	}
 
-	images, err := extractImagesFromDocx(inputFile, reader)
+	text, err := extractTextFromDocx(inputBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = createPDF(text, outputFile, images)
+	images, err := extractImagesFromDocx(inputBytes, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	pdfBytes, err := createPDF(text, images)
+	if err != nil {
+		return nil, err
+	}
+
+	return pdfBytes, nil
 }

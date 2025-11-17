@@ -1,4 +1,4 @@
-module github.com/ryugenxd/docx2pdf
+module github.com/DwifteJB/docx2pdf-bytes
 
 go 1.24.1
 
